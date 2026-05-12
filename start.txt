@@ -17,4 +17,4 @@ isaacsim
 
 
 
-moregputesting works with the simulation on full GPU 
+workingtest 
