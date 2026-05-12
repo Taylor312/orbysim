@@ -1,0 +1,11 @@
+{
+    "python.analysis.extraPaths": [
+        "${workspaceFolder}/.venv/Lib/site-packages/isaacsim/exts",
+        "${workspaceFolder}/.venv/Lib/site-packages/isaacsim/kit/exts",
+        "${workspaceFolder}/.venv/Lib/site-packages/isaacsim/kit/extscore",
+        "${workspaceFolder}/.venv/Lib/site-packages/isaacsim/kit/plugins/bindings-python"
+    ],
+    "python.analysis.diagnosticSeverityOverrides": {
+        "reportMissingModuleSource": "none"
+    }
+}
