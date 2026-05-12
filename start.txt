@@ -1,0 +1,20 @@
+cd C:\MasterData\Backable\Code\ultrasim
+
+.\.venv\Scripts\Activate.ps1
+
+python launch_sim.py
+python test_torch_only.py
+python import_dummy.py
+python test_joints.py
+python movejoints.py
+python gputesting.py
+python moregputesting.py
+python VRIMPL.py
+
+
+isaacsim
+
+
+
+
+moregputesting works with the simulation on full GPU 
