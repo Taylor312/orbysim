@@ -12,9 +12,6 @@ python moregputesting.py
 python VRIMPL.py
 
 
-isaacsim
 
 
-
-
-workingtest 
+python rover.py
