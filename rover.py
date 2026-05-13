@@ -36,11 +36,11 @@ from isaacsim.core.api import World
 from isaacsim.core.api.objects import GroundPlane
 from isaacsim.core.prims import Articulation 
 from isaacsim.core.utils.stage import add_reference_to_stage
-from pxr import UsdLux, Sdf, Gf, UsdShade
+from pxr import UsdLux, Sdf, Gf, UsdShade, UsdPhysics
 import omni.kit.commands
 import omni.appwindow
 import carb.input
-
+from isaacsim.core.utils.prims import get_prim_at_path
 
 # --- 4. START WORLD ---
 world = World(backend="torch", device="cuda:0")
@@ -69,12 +69,14 @@ omni.kit.commands.execute(
     dest_path=USD_OUTPUT_PATH
 )
 
-# --- 7. LOAD ROBOT & ASSIGN MATERIAL ---
+# --- 7. LOAD ROBOT, ASSIGN MATERIAL, & SET MASS ---
 add_reference_to_stage(usd_path=USD_OUTPUT_PATH, prim_path="/World/TankRover")
 robot_prim = Articulation(prim_paths_expr="/World/TankRover", name="Rover")
 world.scene.add(robot_prim)
 
-# PROCEDURAL MATERIAL (Native USD Method)
+stage = world.stage
+
+# A. PROCEDURAL MATERIAL (Native USD Method)
 omni.kit.commands.execute(
     "CreateMdlMaterialPrim",
     mtl_url="OmniPBR.mdl",
@@ -82,7 +84,6 @@ omni.kit.commands.execute(
     mtl_path="/World/Looks/OrangePaint"
 )
 
-stage = world.stage
 mat_prim = stage.GetPrimAtPath("/World/Looks/OrangePaint")
 material = UsdShade.Material(mat_prim)
 rover_usd_prim = stage.GetPrimAtPath("/World/TankRover")
@@ -96,6 +97,14 @@ if shader_prim:
     shader.CreateInput("reflection_roughness_constant", Sdf.ValueTypeNames.Float).Set(0.3)
     shader.CreateInput("metallic_constant", Sdf.ValueTypeNames.Float).Set(0.7)
 
+# B. OVERRIDE MASS AND CENTER OF GRAVITY
+chassis_prim = stage.GetPrimAtPath("/World/TankRover/base_link")
+if chassis_prim:
+    mass_api = UsdPhysics.MassAPI.Apply(chassis_prim)
+    mass_api.CreateMassAttr(25.0) # Set mass to 25kg
+    # Drop the Center of Mass by 5cm to make it more stable in corners
+    mass_api.CreateCenterOfMassAttr(Gf.Vec3f(0.0, 0.0, -0.05)) 
+
 world.reset()
 
 # --- 8. TANK JOINT MAPPING & EFFORT SETUP ---
@@ -107,18 +116,18 @@ br_idx = robot_prim.get_dof_index("Revolute_2")
 num_dof = robot_prim.num_dof
 
 # Stiffness (kP) = 0 for Torque control.
-# Damping (kD) = 2.0 to simulate back-EMF and mechanical friction.
+# Damping (kD) = 5.0 to simulate back-EMF and mechanical friction.
 kps = torch.zeros((robot_prim.count, num_dof), device="cuda:0")
 kds = torch.full((robot_prim.count, num_dof), 5.0, device="cuda:0")
 robot_prim.set_gains(kps=kps, kds=kds)
 
 # --- 9. CARBONITE INPUT INTERFACE ---
-# Corrected for 2026: Using acquire_input_interface() to read states
 input_interface = carb.input.acquire_input_interface()
 appwindow = omni.appwindow.get_default_app_window()
 keyboard = appwindow.get_keyboard()
 
-MAX_TORQUE = 0.3  # Increased slightly for weight
+# Now that the bot is 25kg, you might be able to bump this up to 1.0 or 2.0 without launching it!
+MAX_TORQUE = 0.3  
 print(f" [SUCCESS] Keyboard Torque Control Active. Use Arrow Keys.")
 
 # --- 10. MAIN SIMULATION LOOP ---
