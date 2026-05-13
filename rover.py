@@ -104,7 +104,28 @@ if chassis_prim:
     mass_api.CreateMassAttr(25.0) # Set mass to 25kg
     # Drop the Center of Mass by 5cm to make it more stable in corners
     mass_api.CreateCenterOfMassAttr(Gf.Vec3f(0.0, 0.0, -0.05)) 
+# --- C. PHYSICS MATERIALS (FRICTION OVERRIDE) ---
+from pxr import UsdPhysics, UsdShade
 
+# 1. Define a High-Grip Rubber Material
+rubber_path = "/World/Physics_Materials/HighGripRubber"
+stage.DefinePrim("/World/Physics_Materials", "Scope")
+UsdShade.Material.Define(stage, rubber_path)
+rubber_prim = stage.GetPrimAtPath(rubber_path)
+
+physics_material = UsdPhysics.MaterialAPI.Apply(rubber_prim)
+physics_material.CreateStaticFrictionAttr(2.0)  # Extreme grip threshold
+physics_material.CreateDynamicFrictionAttr(1.5) # High sliding friction
+physics_material.CreateRestitutionAttr(0.0)     # 0.0 bounciness to kill micro-hops
+
+# 2. Bind to Wheels (Using the exact link names from your URDF)
+wheel_names = ["frontleft_1", "frontright_1", "backleft_1", "backright_1"]
+for wheel in wheel_names:
+    wheel_prim = stage.GetPrimAtPath(f"/World/TankRover/{wheel}")
+    if wheel_prim:
+        bind_api = UsdShade.MaterialBindingAPI.Apply(wheel_prim)
+        # Bind specifically to the physics engine, leaving visual textures alone
+        bind_api.Bind(UsdShade.Material(rubber_prim), materialPurpose="physics")
 world.reset()
 
 # --- 8. TANK JOINT MAPPING & EFFORT SETUP ---
