@@ -180,7 +180,7 @@ keyboard = appwindow.get_keyboard()
 
 print(f" [SUCCESS] Orbitron Ready. Drive with Arrow Keys.")
 # --- 10. MAIN LOOP ---
-MAX_SPEED = 30.0 
+MAX_SPEED = 40.0 
 
 # --- HARDWARE ABSTRACTION LAYER (HAL) ---
 # These remain EXACTLY the same because they successfully fixed the 
