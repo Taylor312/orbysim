@@ -14,7 +14,7 @@ except Exception:
 
 from isaacsim import SimulationApp
 
-# --- 2. CONFIGURATION ---
+# --- 2. CONFIGURATION (5090 Optimized) ---
 target_uuid = "GPU-6edeed59-5bbf-c940-8e42-5830baef4d84"
 launch_config = {
     "headless": False,
@@ -28,7 +28,7 @@ launch_config = {
     ]
 }
 
-print(f" [INFO] Booting 5090 Unified Vehicle SDK (2026.1 API)...")
+print(f" [INFO] Taylor Anthony's 5090 Unified Drive Test booting...")
 simulation_app = SimulationApp(launch_config)
 
 # --- 3. IMPORTS ---
@@ -38,13 +38,11 @@ from isaacsim.core.prims import Articulation
 from isaacsim.core.utils.stage import add_reference_to_stage
 from pxr import UsdLux, Sdf, Gf, UsdShade, UsdPhysics, PhysxSchema
 import omni.kit.commands
-import omni.appwindow
-import carb.input
 
 # --- 4. START WORLD ---
 world = World(backend="torch", device="cuda:0")
 
-# --- 5. ENVIRONMENT ---
+# --- 5. ENVIRONMENT (Reverted to standard floor) ---
 light = UsdLux.DomeLight.Define(world.stage, Sdf.Path("/World/Sky"))
 light.CreateIntensityAttr(1000)
 ground = world.scene.add(GroundPlane(prim_path="/World/Ground", z_position=0))
@@ -75,7 +73,18 @@ world.scene.add(robot_prim)
 
 stage = world.stage
 
-# --- 8. THE VEHICLE SDK SURGERY (2026.1 COMPLIANT) ---
+# --- 8. THE VEHICLE SDK SURGERY ---
+
+# A. VIOLENTLY REMOVE ARTICULATION ROOT
+robot_root = stage.GetPrimAtPath("/World/TankRover")
+if robot_root.HasAPI(UsdPhysics.ArticulationRootAPI):
+    robot_root.RemoveAPI(UsdPhysics.ArticulationRootAPI)
+
+base_link = stage.GetPrimAtPath("/World/TankRover/base_link")
+if base_link.HasAPI(UsdPhysics.ArticulationRootAPI):
+    base_link.RemoveAPI(UsdPhysics.ArticulationRootAPI)
+
+# B. WHEEL SURGERY
 wheel_paths = [
     "/World/TankRover/frontleft_1",
     "/World/TankRover/frontright_1",
@@ -87,72 +96,62 @@ for path in wheel_paths:
     wheel_prim = stage.GetPrimAtPath(path)
     if not wheel_prim: continue
 
-    # A. Disable standard 3D Collisions
-    collision_api = UsdPhysics.CollisionAPI(wheel_prim)
-    if collision_api:
-        collision_api.CreateCollisionEnabledAttr(False)
+    UsdPhysics.CollisionAPI.Apply(wheel_prim).CreateCollisionEnabledAttr(False)
 
-    # B. Apply Wheel/Suspension/Tire APIs
     PhysxSchema.PhysxVehicleWheelAttachmentAPI.Apply(wheel_prim).CreateSuspensionTravelDirectionAttr(Gf.Vec3f(0, 0, -1))
-    PhysxSchema.PhysxVehicleWheelAPI.Apply(wheel_prim).CreateRadiusAttr(0.05) 
+    
+    wheel_api = PhysxSchema.PhysxVehicleWheelAPI.Apply(wheel_prim)
+    wheel_api.CreateRadiusAttr(0.05) 
+    wheel_api.CreateMassAttr(1.5) 
+    wheel_api.CreateMoiAttr(0.01) 
     
     susp_api = PhysxSchema.PhysxVehicleSuspensionAPI.Apply(wheel_prim)
     susp_api.CreateTravelDistanceAttr(0.05)   
-    susp_api.CreateSpringStrengthAttr(1200.0)
-    susp_api.CreateSpringDamperRateAttr(25.0) 
+    susp_api.CreateSpringStrengthAttr(1500.0) 
+    susp_api.CreateSpringDamperRateAttr(40.0) 
 
     tire_api = PhysxSchema.PhysxVehicleTireAPI.Apply(wheel_prim)
     tire_api.CreateLatStiffXAttr(0.0001) 
-    tire_api.CreateLongitudinalStiffnessAttr(1000.0)
+    tire_api.CreateLongitudinalStiffnessAttr(2000.0) 
 
-# C. OVERRIDE MASS
-chassis_prim = stage.GetPrimAtPath("/World/TankRover/base_link")
-if chassis_prim:
-    mass_api = UsdPhysics.MassAPI.Apply(chassis_prim)
-    mass_api.CreateMassAttr(25.0)
-    mass_api.CreateCenterOfMassAttr(Gf.Vec3f(0.0, 0.0, -0.05))
+# C. MASTER RIGID BODY FIX
+# 1. Strip the physics from the child link to prevent nested conflicts
+if base_link.HasAPI(UsdPhysics.RigidBodyAPI):
+    base_link.RemoveAPI(UsdPhysics.RigidBodyAPI)
+if base_link.HasAPI(UsdPhysics.MassAPI):
+    base_link.RemoveAPI(UsdPhysics.MassAPI)
 
-# D. UNIFIED DRIVE & DIFFERENTIAL APPLICATION
-PhysxSchema.PhysxVehicleAPI.Apply(chassis_prim)
-drive_api = PhysxSchema.PhysxVehicleDriveBasicAPI.Apply(chassis_prim)
-diff_api = PhysxSchema.PhysxVehicleMultiWheelDifferentialAPI.Apply(chassis_prim)
-controller_api = PhysxSchema.PhysxVehicleControllerAPI.Apply(chassis_prim)
+# 2. Elevate the RigidBody and Mass to the exact same prim as the VehicleAPI
+PhysxSchema.PhysxRigidBodyAPI.Apply(robot_root).CreateSleepThresholdAttr(0.0)
+mass_api = UsdPhysics.MassAPI.Apply(robot_root)
+mass_api.CreateMassAttr(25.0)
+mass_api.CreateCenterOfMassAttr(Gf.Vec3f(0.0, 0.0, -0.05))
+
+# D. UNIFIED DRIVE APPLICATION (Root Logic)
+PhysxSchema.PhysxVehicleAPI.Apply(robot_root)
+
+drive_api = PhysxSchema.PhysxVehicleDriveBasicAPI.Apply(robot_root)
+drive_api.CreatePeakTorqueAttr(1000.0) 
+
+diff_api = PhysxSchema.PhysxVehicleMultiWheelDifferentialAPI.Apply(robot_root)
+diff_api.CreateWheelsAttr([0, 1, 2, 3])
+diff_api.CreateTorqueRatiosAttr([1.0, 1.0, 1.0, 1.0])
+
+controller_api = PhysxSchema.PhysxVehicleControllerAPI.Apply(robot_root)
 
 # --- 9. INITIALIZE PHYSICS ---
-# CRITICAL: We reset the world BEFORE querying robot_prim.num_dof
 world.reset()
 
-# Now that the world is reset, num_dof will be valid (integer) instead of None
-num_dof = robot_prim.num_dof
-if num_dof is not None:
-    robot_prim.set_gains(
-        kps=torch.zeros((1, num_dof), device="cuda:0"), 
-        kds=torch.zeros((1, num_dof), device="cuda:0")
-    )
+print(f" [SUCCESS] 2026.1 Unified Drive Active. Automatic throttle engaged.")
 
-# --- 10. CARBONITE INPUT ---
-input_interface = carb.input.acquire_input_interface()
-appwindow = omni.appwindow.get_default_app_window()
-keyboard = appwindow.get_keyboard()
-
-print(f" [SUCCESS] 2026.1 Unified Vehicle Differential Active. Drive with Arrows.")
-
-# --- 11. MAIN SIMULATION LOOP ---
+# --- 10. MAIN SIMULATION LOOP ---
 while simulation_app.is_running():
-    up = input_interface.get_keyboard_value(keyboard, carb.input.KeyboardInput.UP)
-    down = input_interface.get_keyboard_value(keyboard, carb.input.KeyboardInput.DOWN)
-    left = input_interface.get_keyboard_value(keyboard, carb.input.KeyboardInput.LEFT)
-    right = input_interface.get_keyboard_value(keyboard, carb.input.KeyboardInput.RIGHT)
+    # Constant throttle bench-test
+    accel = 0.5 
+    steer = 0.0
 
-    accel = float(up - down)
-    steer = float(right - left)
-
-    if not controller_api.GetAcceleratorAttr():
-        controller_api.CreateAcceleratorAttr(accel)
-        controller_api.CreateSteerAttr(steer)
-    else:
-        controller_api.GetAcceleratorAttr().Set(accel)
-        controller_api.GetSteerAttr().Set(steer)
+    controller_api.GetAcceleratorAttr().Set(accel)
+    controller_api.GetSteerAttr().Set(steer)
 
     world.step(render=True)
 
