@@ -81,6 +81,7 @@ def setup_orbitron_physics(root_path):
     UsdShade.Material.Define(stage, mat_path)
     rubber_mat = UsdPhysics.MaterialAPI.Apply(stage.GetPrimAtPath(mat_path))
     rubber_mat.CreateStaticFrictionAttr(1.5)
+    rubber_mat.CreateDynamicFrictionAttr(1.2)
     rubber_mat.CreateRestitutionAttr(0.0)
 
     # 1. Clean existing Articulation Roots to prevent nesting
@@ -106,7 +107,7 @@ def setup_orbitron_physics(root_path):
 
         # 3. CHASSIS RIGID BODY
         if p_path.endswith("base_link") and prim.IsA(UsdGeom.Xformable):
-            UsdPhysics.MassAPI.Apply(prim).CreateMassAttr(25.0)
+            UsdPhysics.MassAPI.Apply(prim).CreateMassAttr(200.0)
             UsdPhysics.RigidBodyAPI.Apply(prim)
 
         # 4. WHEEL SURGERY
