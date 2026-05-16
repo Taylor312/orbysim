@@ -1,13 +1,14 @@
+from utils.constants import OrbitronConfig
+
 class SimpleForceSolver:
-    def __init__(self, wheel_radius_m=0.0635, track_width_m=0.508):
-        self.r = wheel_radius_m
-        self.track_width = track_width_m
+    def __init__(self):
+        self.r = OrbitronConfig.WHEEL_RADIUS_M
+        self.track_width = OrbitronConfig.TRACK_WIDTH_M
 
     def compute_chassis_forces(self, torque_fl, torque_fr, torque_bl, torque_br):
         """ 
         Converts 4 independent wheel torques into a central push.
         """
-
         f_fl = torque_fl / self.r
         f_fr = torque_fr / self.r
         f_bl = torque_bl / self.r
