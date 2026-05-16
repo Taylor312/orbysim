@@ -12,7 +12,6 @@ from utils.motor_sim import Apex3Motor
 from utils.battery_sim import OrbyBattery
 
 def main():
-    # --- 1. HARDWARE HUNT (XBOX CONTROLLER) ---
     pygame.init()
     pygame.joystick.init()
     joystick = None
@@ -30,17 +29,20 @@ def main():
         print("[ERROR] No Xbox controller found! Plug it in.")
         return
 
-    # --- 2. VIRTUAL HARDWARE INSTANTIATION ---
     motor = Apex3Motor()
     battery = OrbyBattery()
     
     current_rpm = 0.0
     dt = 1.0 / 60.0  
+    
+    # THE NEW ANGLE: Sub-stepping variables
+    physics_substeps = 50
+    sub_dt = dt / physics_substeps
+    
     max_theoretical_rpm = OrbitronConfig.V_BUS_MAX * OrbitronConfig.MOTOR_KV 
 
-    # --- 3. DEARPYGUI SETUP ---
     dpg.create_context()
-    dpg.create_viewport(title="VESC PID, Thermal & Battery Simulator", width=1000, height=980)
+    dpg.create_viewport(title="VESC PID, Thermal & Battery Simulator", width=1000, height=1000)
     dpg.setup_dearpygui()
 
     max_points = 300
@@ -52,29 +54,27 @@ def main():
     t_bulk_data = deque(maxlen=max_points)
     v_bat_data = deque(maxlen=max_points)
 
-    with dpg.window(label="Test Stand Dashboard", width=980, height=930, no_collapse=True):
+    with dpg.window(label="Test Stand Dashboard", width=980, height=950, no_collapse=True):
         dpg.add_text("Push Left Stick Y to command RPM", color=[0, 255, 0])
         
-        # LIVE BATTERY TELEMETRY TEXT READOUTS
         with dpg.group(horizontal=True):
             dpg.add_text("Battery Voltage: ")
-            dpg.add_text("67.2V", tag="txt_bat_voltage", color=[0, 200, 255])
+            dpg.add_text("69.6V", tag="txt_bat_voltage", color=[0, 200, 255])
             dpg.add_text(" | Pack SoC: ")
-            dpg.add_text("100.0%", tag="txt_bat_soc", color=[0, 255, 100])
+            dpg.add_text("100.000%", tag="txt_bat_soc", color=[0, 255, 100])
             dpg.add_text(" | Bus Current: ")
             dpg.add_text("0.0A", tag="txt_bus_current", color=[255, 150, 0])
         
-        # LIVE TUNING SLIDERS
         dpg.add_separator()
         dpg.add_text("Tuning Parameters:")
         dpg.add_slider_float(label="Kp (Proportional)", tag="ui_kp", min_value=0.0, max_value=0.1, default_value=OrbitronConfig.VESC_KP, format="%.4f", width=400)
         dpg.add_slider_float(label="Ki (Integral)", tag="ui_ki", min_value=0.0, max_value=0.5, default_value=OrbitronConfig.VESC_KI, format="%.4f", width=400)
         dpg.add_slider_float(label="ESC Current Limit (Amps)", tag="ui_current_limit", min_value=10.0, max_value=300.0, default_value=OrbitronConfig.ESC_CURRENT_LIMIT, format="%.1f", width=400)
         dpg.add_slider_float(label="Flywheel Inertia (kg*m^2)", tag="ui_inertia", min_value=0.00001, max_value=0.5, default_value=0.00006, format="%.5f", width=400)
+        dpg.add_slider_float(label="Dyno Friction Load (Nm)", tag="ui_dyno_load", min_value=0.0, max_value=5.0, default_value=0.0, format="%.2f", width=400)
         dpg.add_separator()
 
-        # PLOT 1: RPM
-        with dpg.plot(label="Velocity Control Loop (RPM)", height=200, width=-1):
+        with dpg.plot(label="Velocity Control Loop (RPM)", height=180, width=-1):
             dpg.add_plot_legend()
             x_axis_rpm = dpg.add_plot_axis(dpg.mvXAxis, label="Time (s)", tag="x_axis_rpm")
             y_axis_rpm = dpg.add_plot_axis(dpg.mvYAxis, label="RPM", tag="y_axis_rpm")
@@ -82,16 +82,14 @@ def main():
             dpg.add_line_series([], [], label="Target RPM", parent=y_axis_rpm, tag="plot_t_rpm")
             dpg.add_line_series([], [], label="Actual RPM", parent=y_axis_rpm, tag="plot_a_rpm")
 
-        # PLOT 2: TORQUE
-        with dpg.plot(label="Motor Output Torque (Nm)", height=180, width=-1):
+        with dpg.plot(label="Motor Output Torque (Nm)", height=160, width=-1):
             dpg.add_plot_legend()
             x_axis_torque = dpg.add_plot_axis(dpg.mvXAxis, label="Time (s)", tag="x_axis_torque")
             y_axis_torque = dpg.add_plot_axis(dpg.mvYAxis, label="Torque (Nm)", tag="y_axis_torque")
             dpg.set_axis_limits(y_axis_torque, -6.0, 6.0) 
             dpg.add_line_series([], [], label="Net Torque", parent=y_axis_torque, tag="plot_torque")
 
-        # PLOT 3: TWO-NODE THERMAL SENSOR CORE
-        with dpg.plot(label="Two-Node Thermal Sensor Core (deg C)", height=180, width=-1):
+        with dpg.plot(label="Two-Node Thermal Sensor Core (deg C)", height=160, width=-1):
             dpg.add_plot_legend()
             x_axis_temp = dpg.add_plot_axis(dpg.mvXAxis, label="Time (s)", tag="x_axis_temp")
             y_axis_temp = dpg.add_plot_axis(dpg.mvYAxis, label="Temperature (C)", tag="y_axis_temp")
@@ -100,7 +98,6 @@ def main():
             dpg.add_line_series([], [], label="Winding Temp (Copper)", parent=y_axis_temp, tag="plot_t_copper")
             dpg.add_line_series([], [], label="Casing Temp (Bulk)", parent=y_axis_temp, tag="plot_t_bulk")
             
-        # PLOT 4: BATTERY PACK TERMINAL VOLTAGE
         with dpg.plot(label="Loaded Battery Pack DC Rail Voltage (V)", height=160, width=-1):
             dpg.add_plot_legend()
             x_axis_bat = dpg.add_plot_axis(dpg.mvXAxis, label="Time (s)", tag="x_axis_bat")
@@ -119,32 +116,36 @@ def main():
         motor.ki = dpg.get_value("ui_ki")
         motor.current_limit = dpg.get_value("ui_current_limit")
         flywheel_inertia = max(0.00001, dpg.get_value("ui_inertia")) 
+        dyno_load = dpg.get_value("ui_dyno_load")
         
         raw_stick = -joystick.get_axis(1)
         if abs(raw_stick) < 0.05: raw_stick = 0.0 
         target_rpm = raw_stick * max_theoretical_rpm
 
-        # Process motor calculations linked to the shared stateful battery pack
-        torque_nm, bus_current = motor.compute_torque(target_rpm, current_rpm, dt, battery_obj=battery)
-        
-        # Advance battery state based on aggregate bus requirements
-        battery.step(bus_current, dt)
+        # THE NEW ANGLE: 3,000 Hz Physics Micro-Loop
+        for _ in range(physics_substeps):
+            torque_nm, bus_current = motor.compute_torque(target_rpm, current_rpm, sub_dt, battery_obj=battery)
+            battery.step(bus_current, sub_dt)
 
-        # Mechanical Load Application Loop
-        rads_per_sec = current_rpm * (np.pi / 30.0)
-        damping_torque = 0.00001 * rads_per_sec  
-        net_torque = torque_nm - damping_torque
-        
-        alpha = net_torque / flywheel_inertia
-        rads_per_sec += alpha * dt
-        current_rpm = rads_per_sec * (30.0 / np.pi)
+            if current_rpm > 50:
+                mech_load = dyno_load
+            elif current_rpm < -50:
+                mech_load = -dyno_load
+            else:
+                mech_load = (current_rpm / 50.0) * dyno_load  
 
-        # Update Live Dashboard Indicators
+            damping_torque = 0.00001 * (current_rpm * (np.pi / 30.0))  
+            net_torque = torque_nm - damping_torque - mech_load
+            
+            alpha = net_torque / flywheel_inertia
+            rads_per_sec = (current_rpm * (np.pi / 30.0)) + (alpha * sub_dt)
+            current_rpm = rads_per_sec * (30.0 / np.pi)
+
+        # UI Updates & Graph Logging (only drawn once per 60Hz frame)
         dpg.set_value("txt_bat_voltage", f"{battery.v_bus:.2f}V")
-        dpg.set_value("txt_bat_soc", f"{(battery.soc * 100.0):.1f}%")
+        dpg.set_value("txt_bat_soc", f"{(battery.soc * 100.0):.3f}%")
         dpg.set_value("txt_bus_current", f"{bus_current:.1f}A")
 
-        # History arrays update
         current_time = time.time() - start_time
         time_data.append(current_time)
         t_rpm_data.append(target_rpm)

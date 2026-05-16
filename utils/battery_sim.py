@@ -4,12 +4,14 @@ from utils.constants import OrbitronConfig
 class OrbyBattery:
     def __init__(self):
         self.capacity_ah = OrbitronConfig.BATTERY_CAPACITY_AH
-        self.max_capacity_as = self.capacity_ah * 3600.0  # Convert Ah to Amp-seconds
+        self.max_capacity_as = self.capacity_ah * 3600.0  
         self.current_capacity_as = self.max_capacity_as
         self.R_internal = OrbitronConfig.BATTERY_RESISTANCE
         
         self.soc = 1.0
-        self.v_bus = OrbitronConfig.V_BUS_MAX
+        # Expose Open Circuit Voltage for implicit circuit solving
+        self.v_oc = OrbitronConfig.V_BUS_MAX
+        self.v_bus = self.v_oc
 
     def step(self, total_bus_current, dt):
         """
@@ -20,9 +22,8 @@ class OrbyBattery:
         
         self.soc = self.current_capacity_as / self.max_capacity_as
         
-        # 16S Pack Cell mapping constraints
         v_cell = OrbitronConfig.V_BUS_MIN/16.0 + (OrbitronConfig.V_BUS_MAX/16.0 - OrbitronConfig.V_BUS_MIN/16.0) * self.soc
-        v_oc = v_cell * 16.0
+        self.v_oc = v_cell * 16.0
         
-        self.v_bus = v_oc - (total_bus_current * self.R_internal)
+        self.v_bus = self.v_oc - (total_bus_current * self.R_internal)
         return self.v_bus

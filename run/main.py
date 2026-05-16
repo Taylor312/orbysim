@@ -149,22 +149,34 @@ def main(telemetry_queue):
             c_rpm_bl = current_rads[bl_idx].item() * (30.0 / np.pi)
             c_rpm_br = current_rads[br_idx].item() * (30.0 / np.pi)
 
-            torque_fl = motor_fl.compute_torque(throttle_fl, c_rpm_fl)
-            torque_fr = motor_fr.compute_torque(throttle_fr, c_rpm_fr)
-            torque_bl = motor_bl.compute_torque(throttle_bl, c_rpm_bl)
-            torque_br = motor_br.compute_torque(throttle_br, c_rpm_br)
+            torque_fl = motor_fl.compute_torque(throttle_fl, grip_rpm)
+            torque_fr = motor_fr.compute_torque(throttle_fr, grip_rpm)
+            torque_bl = motor_bl.compute_torque(throttle_bl, grip_rpm)
+            torque_br = motor_br.compute_torque(throttle_br, grip_rpm)
 
-            f_thrust, t_yaw = force_solver.compute_chassis_forces(torque_fl, torque_fr, torque_bl, torque_br)
+            # 4. The 4-Corner Physics Solver
+            # We enforce a grip limit based on 4.5g of required downforce
+            f_thrust, t_pitch, t_yaw, slips = force_solver.compute_4_corner_forces(
+                torque_fl, torque_fr, torque_bl, torque_br, 
+                total_downforce_n=required_downforce_n, mu=1.0
+            )
 
+            # 5. The Visual Slip Illusion
+            # Base visual speed is locked to the ground (grip). If a wheel slips, 
+            # the excess force is mathematically dumped into rotational speed.
+            slip_fl, slip_fr, slip_bl, slip_br = slips
+            slip_scalar = 5.0 # Visual multiplier to make slip obvious
+            
             action = torch.zeros(orbitron.num_dof, device="cuda:0")
-            action[OrbitronConfig.IDX_FL] = throttle_fl * OrbitronConfig.MAX_TELEOP_RPM * (np.pi / 30.0)
-            action[OrbitronConfig.IDX_FR] = throttle_fr * OrbitronConfig.MAX_TELEOP_RPM * (np.pi / 30.0)
-            action[OrbitronConfig.IDX_BL] = throttle_bl * OrbitronConfig.MAX_TELEOP_RPM * (np.pi / 30.0)
-            action[OrbitronConfig.IDX_BR] = throttle_br * OrbitronConfig.MAX_TELEOP_RPM * (np.pi / 30.0)
+            action[OrbitronConfig.IDX_FL] = (grip_rpm * (np.pi/30.0)) + (slip_fl * slip_scalar)
+            action[OrbitronConfig.IDX_FR] = (grip_rpm * (np.pi/30.0)) + (slip_fr * slip_scalar)
+            action[OrbitronConfig.IDX_BL] = (grip_rpm * (np.pi/30.0)) + (slip_bl * slip_scalar)
+            action[OrbitronConfig.IDX_BR] = (grip_rpm * (np.pi/30.0)) + (slip_br * slip_scalar)
             orbitron.set_joint_velocity_targets(action)
 
-            f_vec = torch.tensor([[f_thrust, 0.0, 0.0]], dtype=torch.float32, device="cuda:0")
-            t_vec = torch.tensor([[0.0, 0.0, t_yaw]], dtype=torch.float32, device="cuda:0")
+            # 6. Apply Master Forces to Chassis CoM
+            f_vec = torch.tensor([[f_thrust, 0.0, -required_downforce_n]], dtype=torch.float32, device="cuda:0")
+            t_vec = torch.tensor([[0.0, t_pitch, t_yaw]], dtype=torch.float32, device="cuda:0")
             chassis_view.apply_forces_and_torques_at_pos(forces=f_vec, torques=t_vec, is_global=False)
 
             try:
