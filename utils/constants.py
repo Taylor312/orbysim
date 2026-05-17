@@ -23,6 +23,8 @@ class OrbitronConfig:
     MOTOR_KV = 750.0        
     MOTOR_RESISTANCE = 0.0081 
     ESC_CURRENT_LIMIT = 250.0 
+
+    GEAR_RATIO = 30.0
     
     # THE FIX: Softened VESC PI Loop Tuning to prevent micro-chatter
     VESC_KP = 0.005   
