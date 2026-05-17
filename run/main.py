@@ -15,8 +15,6 @@ try:
 except Exception:
     pass
 
-# THE FIX: Added an extra os.path.dirname() to step out of the 'run/' folder 
-# and target the root project directory so Python can find the 'utils/' package.
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.constants import OrbitronConfig
@@ -40,7 +38,7 @@ def main(telemetry_queue, cmd_queue):
         ]
     }
 
-    print(f" [INFO] Orbitron Architecture: 144Hz HITL Tuned Edition")
+    print(f" [INFO] Orbitron Architecture: Constants-Driven HITL Edition")
     simulation_app = SimulationApp(launch_config)
 
     # --- 3. IMPORTS ---
@@ -51,12 +49,13 @@ def main(telemetry_queue, cmd_queue):
     from pxr import UsdLux, Sdf, Gf, UsdPhysics, PhysxSchema, UsdGeom, UsdShade
     import omni.kit.commands
 
-    # --- 4. START WORLD & 144Hz TGS SOLVER ---
-    # DECOUPLED CLOCKS: Physics at 144 Hz, Render at 60 Hz
-    SIM_PHYSICS_DT = 1.0 / 144.0
-    SIM_RENDER_DT = 1.0 / 60.0
-    
-    world = World(backend="torch", device="cuda:0", physics_dt=SIM_PHYSICS_DT, rendering_dt=SIM_RENDER_DT)
+    # --- 4. START WORLD & TGS SOLVER ---
+    world = World(
+        backend="torch", 
+        device="cuda:0", 
+        physics_dt=OrbitronConfig.PHYSICS_DT, 
+        rendering_dt=OrbitronConfig.RENDER_DT
+    )
     stage = world.stage
 
     scene_prim = stage.GetPrimAtPath("/physicsScene")
@@ -65,7 +64,7 @@ def main(telemetry_queue, cmd_queue):
 
     physx_scene = PhysxSchema.PhysxSceneAPI.Apply(scene_prim)
     physx_scene.CreateSolverTypeAttr("TGS")
-    physx_scene.CreateTimeStepsPerSecondAttr(144) 
+    physx_scene.CreateTimeStepsPerSecondAttr(OrbitronConfig.PHYSICS_HZ) 
     physx_scene.CreateMaxPositionIterationCountAttr(32)
     physx_scene.CreateMaxVelocityIterationCountAttr(16)
 
@@ -100,9 +99,9 @@ def main(telemetry_queue, cmd_queue):
         UsdShade.Material.Define(stage, mat_path)
         
         rubber_mat = UsdPhysics.MaterialAPI.Apply(stage.GetPrimAtPath(mat_path))
-        rubber_mat.CreateStaticFrictionAttr(1.5)
-        rubber_mat.CreateDynamicFrictionAttr(1.2)
-        rubber_mat.CreateRestitutionAttr(0.0)
+        rubber_mat.CreateStaticFrictionAttr(OrbitronConfig.STATIC_FRICTION)
+        rubber_mat.CreateDynamicFrictionAttr(OrbitronConfig.DYNAMIC_FRICTION)
+        rubber_mat.CreateRestitutionAttr(OrbitronConfig.RESTITUTION)
 
         for prim in stage.Traverse():
             if prim.HasAPI(UsdPhysics.ArticulationRootAPI):
@@ -121,14 +120,13 @@ def main(telemetry_queue, cmd_queue):
                 continue
 
             if p_path.endswith("base_link") and prim.IsA(UsdGeom.Xformable):
-                UsdPhysics.MassAPI.Apply(prim).CreateMassAttr(25.0)
+                UsdPhysics.MassAPI.Apply(prim).CreateMassAttr(OrbitronConfig.CHASSIS_MASS_KG)
                 UsdPhysics.RigidBodyAPI.Apply(prim)
 
             if ("left" in p_path or "right" in p_path) and prim.IsA(UsdGeom.Xformable):
                 if "joints" in p_path: continue
                 if prim.IsInstanceable(): prim.SetInstanceable(False)
                 
-                # Turn off the collision AND the visibility of the original CAD wheels
                 for child in prim.GetChildren():
                     if child.IsA(UsdGeom.Mesh): 
                         UsdPhysics.CollisionAPI.Apply(child).CreateCollisionEnabledAttr(False)
@@ -136,12 +134,14 @@ def main(telemetry_queue, cmd_queue):
 
                 cylinder_path = f"{p_path}/physics_cylinder"
                 cylinder_geom = UsdGeom.Cylinder.Define(stage, cylinder_path)
-                cylinder_geom.CreateRadiusAttr(0.03)
-                cylinder_geom.CreateHeightAttr(0.02)
+                cylinder_geom.CreateRadiusAttr(OrbitronConfig.WHEEL_RADIUS_M)
+                cylinder_geom.CreateHeightAttr(OrbitronConfig.WHEEL_WIDTH_M)
                 cylinder_geom.CreateAxisAttr("X") 
                 
                 direction_multiplier = 1.0 if "left" in p_path else -1.0
-                UsdGeom.XformCommonAPI(cylinder_geom).SetTranslate(Gf.Vec3d(0.015 * direction_multiplier, 0.0, 0.0))
+                UsdGeom.XformCommonAPI(cylinder_geom).SetTranslate(
+                    Gf.Vec3d(OrbitronConfig.WHEEL_OFFSET_M * direction_multiplier, 0.0, 0.0)
+                )
                 
                 cylinder_geom.CreateDisplayColorAttr([(0.0, 1.0, 0.0)])
                 cylinder_geom.CreateDisplayOpacityAttr([0.5]) 
@@ -153,17 +153,19 @@ def main(telemetry_queue, cmd_queue):
 
                 UsdPhysics.RigidBodyAPI.Apply(prim)
                 mass_api = UsdPhysics.MassAPI.Apply(prim)
-                mass_api.CreateMassAttr(1.5)
+                mass_api.CreateMassAttr(OrbitronConfig.WHEEL_MASS_KG)
                 mass_api.CreateCenterOfMassAttr(Gf.Vec3f(0, 0, 0))
                 
-                # Lower virtual inertia by 10x
-                mass_api.CreateDiagonalInertiaAttr(Gf.Vec3f(0.005, 0.005, 0.005))
+                mass_api.CreateDiagonalInertiaAttr(Gf.Vec3f(
+                    OrbitronConfig.WHEEL_INERTIA, 
+                    OrbitronConfig.WHEEL_INERTIA, 
+                    OrbitronConfig.WHEEL_INERTIA
+                ))
 
             if prim.IsA(UsdPhysics.RevoluteJoint):
                 drive_api = UsdPhysics.DriveAPI.Apply(prim, "angular")
                 drive_api.CreateStiffnessAttr(0.0)
-                # Lower mechanical gearbox drag to allow rapid spool-up
-                drive_api.CreateDampingAttr(0.2) 
+                drive_api.CreateDampingAttr(OrbitronConfig.GEARBOX_DRAG_DAMPING) 
 
     setup_orbitron_physics(OrbitronConfig.ROBOT_PRIM_PATH)
 
@@ -206,16 +208,13 @@ def main(telemetry_queue, cmd_queue):
     motor_bl = Apex3Motor()
     motor_br = Apex3Motor()
 
-    # Max Trampa VESC limit (250A) for violent acceleration
-    MULE_CURRENT_LIMIT = 250.0 
-    motor_fl.current_limit = MULE_CURRENT_LIMIT
-    motor_fr.current_limit = MULE_CURRENT_LIMIT
-    motor_bl.current_limit = MULE_CURRENT_LIMIT
-    motor_br.current_limit = MULE_CURRENT_LIMIT
+    motor_fl.current_limit = OrbitronConfig.ESC_CURRENT_LIMIT
+    motor_fr.current_limit = OrbitronConfig.ESC_CURRENT_LIMIT
+    motor_bl.current_limit = OrbitronConfig.ESC_CURRENT_LIMIT
+    motor_br.current_limit = OrbitronConfig.ESC_CURRENT_LIMIT
 
-    GEAR_RATIO = 25.0 
-    WHEEL_RPM_CAP = 1600.0 
-    DOWNFORCE_N = -1500.0 
+    # Dynamic limits pulling from Constants initially 
+    WHEEL_RPM_CAP = OrbitronConfig.DEFAULT_RPM_CAP 
 
     frame_count = 0
 
@@ -240,18 +239,18 @@ def main(telemetry_queue, cmd_queue):
             if abs(accel) < 0.1: accel = 0.0
             if abs(steer) < 0.1: steer = 0.0
 
-        sim_time = frame_count * SIM_PHYSICS_DT
-        ramp_factor = min(1.0, sim_time / 1.5)
-        current_downforce_n = DOWNFORCE_N * ramp_factor
+        sim_time = frame_count * OrbitronConfig.PHYSICS_DT
+        ramp_factor = min(1.0, sim_time / OrbitronConfig.DOWNFORCE_RAMP_TIME_S)
+        current_downforce_n = OrbitronConfig.DOWNFORCE_N * ramp_factor
 
         left_mix = accel + steer
         right_mix = accel - steer
         max_mag = max(1.0, abs(left_mix), abs(right_mix))
         
-        t_motor_rpm_fl = (left_mix / max_mag) * WHEEL_RPM_CAP * GEAR_RATIO
-        t_motor_rpm_bl = (left_mix / max_mag) * WHEEL_RPM_CAP * GEAR_RATIO
-        t_motor_rpm_fr = (right_mix / max_mag) * WHEEL_RPM_CAP * GEAR_RATIO
-        t_motor_rpm_br = (right_mix / max_mag) * WHEEL_RPM_CAP * GEAR_RATIO
+        t_motor_rpm_fl = (left_mix / max_mag) * WHEEL_RPM_CAP * OrbitronConfig.GEAR_RATIO
+        t_motor_rpm_bl = (left_mix / max_mag) * WHEEL_RPM_CAP * OrbitronConfig.GEAR_RATIO
+        t_motor_rpm_fr = (right_mix / max_mag) * WHEEL_RPM_CAP * OrbitronConfig.GEAR_RATIO
+        t_motor_rpm_br = (right_mix / max_mag) * WHEEL_RPM_CAP * OrbitronConfig.GEAR_RATIO
 
         if orbitron.num_dof >= 4:
             current_rads = orbitron.get_joint_velocities()[0]
@@ -261,27 +260,25 @@ def main(telemetry_queue, cmd_queue):
             w_rpm_bl = current_rads[bl_idx].item() * (30.0 / np.pi) * OrbitronConfig.INV_BL
             w_rpm_br = current_rads[br_idx].item() * (30.0 / np.pi) * OrbitronConfig.INV_BR
 
-            c_motor_rpm_fl = w_rpm_fl * GEAR_RATIO
-            c_motor_rpm_fr = w_rpm_fr * GEAR_RATIO
-            c_motor_rpm_bl = w_rpm_bl * GEAR_RATIO
-            c_motor_rpm_br = w_rpm_br * GEAR_RATIO
-
-            dt = SIM_PHYSICS_DT
+            c_motor_rpm_fl = w_rpm_fl * OrbitronConfig.GEAR_RATIO
+            c_motor_rpm_fr = w_rpm_fr * OrbitronConfig.GEAR_RATIO
+            c_motor_rpm_bl = w_rpm_bl * OrbitronConfig.GEAR_RATIO
+            c_motor_rpm_br = w_rpm_br * OrbitronConfig.GEAR_RATIO
             
-            m_torque_fl, _ = motor_fl.compute_torque(t_motor_rpm_fl, c_motor_rpm_fl, dt, battery)
-            m_torque_fr, _ = motor_fr.compute_torque(t_motor_rpm_fr, c_motor_rpm_fr, dt, battery)
-            m_torque_bl, _ = motor_bl.compute_torque(t_motor_rpm_bl, c_motor_rpm_bl, dt, battery)
-            m_torque_br, _ = motor_br.compute_torque(t_motor_rpm_br, c_motor_rpm_br, dt, battery)
+            m_torque_fl, _ = motor_fl.compute_torque(t_motor_rpm_fl, c_motor_rpm_fl, OrbitronConfig.PHYSICS_DT, battery)
+            m_torque_fr, _ = motor_fr.compute_torque(t_motor_rpm_fr, c_motor_rpm_fr, OrbitronConfig.PHYSICS_DT, battery)
+            m_torque_bl, _ = motor_bl.compute_torque(t_motor_rpm_bl, c_motor_rpm_bl, OrbitronConfig.PHYSICS_DT, battery)
+            m_torque_br, _ = motor_br.compute_torque(t_motor_rpm_br, c_motor_rpm_br, OrbitronConfig.PHYSICS_DT, battery)
 
             def sanitize_torque(t):
                 if t is None or np.isnan(t) or np.isinf(t): return 0.0
                 return float(t)
 
             efforts = torch.zeros(orbitron.num_dof, device="cuda:0")
-            efforts[fl_idx] = sanitize_torque(m_torque_fl) * GEAR_RATIO * 0.90 * OrbitronConfig.INV_FL
-            efforts[fr_idx] = sanitize_torque(m_torque_fr) * GEAR_RATIO * 0.90 * OrbitronConfig.INV_FR
-            efforts[bl_idx] = sanitize_torque(m_torque_bl) * GEAR_RATIO * 0.90 * OrbitronConfig.INV_BL
-            efforts[br_idx] = sanitize_torque(m_torque_br) * GEAR_RATIO * 0.90 * OrbitronConfig.INV_BR
+            efforts[fl_idx] = sanitize_torque(m_torque_fl) * OrbitronConfig.GEAR_RATIO * OrbitronConfig.GEARBOX_EFFICIENCY * OrbitronConfig.INV_FL
+            efforts[fr_idx] = sanitize_torque(m_torque_fr) * OrbitronConfig.GEAR_RATIO * OrbitronConfig.GEARBOX_EFFICIENCY * OrbitronConfig.INV_FR
+            efforts[bl_idx] = sanitize_torque(m_torque_bl) * OrbitronConfig.GEAR_RATIO * OrbitronConfig.GEARBOX_EFFICIENCY * OrbitronConfig.INV_BL
+            efforts[br_idx] = sanitize_torque(m_torque_br) * OrbitronConfig.GEAR_RATIO * OrbitronConfig.GEARBOX_EFFICIENCY * OrbitronConfig.INV_BR
             
             efforts = torch.clamp(efforts, min=-200.0, max=200.0)
             orbitron.set_joint_efforts(efforts)
@@ -292,8 +289,8 @@ def main(telemetry_queue, cmd_queue):
             try:
                 telemetry_queue.put_nowait({
                     "accel": accel, "steer": steer,
-                    "t_rpm_fl": t_motor_rpm_fl / GEAR_RATIO, 
-                    "c_rpm_fl": c_motor_rpm_fl / GEAR_RATIO,
+                    "t_rpm_fl": t_motor_rpm_fl / OrbitronConfig.GEAR_RATIO, 
+                    "c_rpm_fl": c_motor_rpm_fl / OrbitronConfig.GEAR_RATIO,
                     "f_thrust": 0.0, "t_yaw": 0.0
                 })
             except:

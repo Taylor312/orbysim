@@ -6,16 +6,28 @@ class OrbitronConfig:
     ROBOT_PRIM_PATH = "/World/TankRover"
 
     # --- 2. SIMULATION TIMING & LIMITS ---
-    PHYSICS_DT = 1.0 / 120.0
-    MAX_TELEOP_RPM = 52200.0 # 69.6V * 750KV LiHV Peak
+    PHYSICS_HZ = 144
+    RENDER_HZ = 60
+    PHYSICS_DT = 1.0 / PHYSICS_HZ
+    RENDER_DT = 1.0 / RENDER_HZ
+    DEFAULT_RPM_CAP = 1600.0 
 
-    # --- 3. CHASSIS KINEMATICS & PHYSICS ---
-    CHASSIS_MASS_KG = 200.0
+    # --- 3. TEST MULE PHYSICS & KINEMATICS ---
+    CHASSIS_MASS_KG = 25.0
     WHEEL_MASS_KG = 1.5
     WHEEL_RADIUS_M = 0.03
-    TRACK_WIDTH_M = 0.508
-    WHEELBASE_M = 0.343  
-    CG_HEIGHT_M = 0.106  
+    WHEEL_WIDTH_M = 0.02
+    WHEEL_OFFSET_M = 0.015
+    
+    # Virtual Stability & Friction
+    WHEEL_INERTIA = 0.005
+    GEARBOX_DRAG_DAMPING = 0.2
+    STATIC_FRICTION = 1.5
+    DYNAMIC_FRICTION = 1.2
+    RESTITUTION = 0.0
+    
+    DOWNFORCE_N = -1500.0
+    DOWNFORCE_RAMP_TIME_S = 1.5
 
     # --- 4. MOTOR SIMULATOR (TP5870 750KV & Trampa VESC) ---
     V_BUS_MAX = 69.6          
@@ -23,23 +35,20 @@ class OrbitronConfig:
     MOTOR_KV = 750.0        
     MOTOR_RESISTANCE = 0.0081 
     ESC_CURRENT_LIMIT = 250.0 
-
-    GEAR_RATIO = 30.0
     
-    # THE FIX: Softened VESC PI Loop Tuning to prevent micro-chatter
+    GEAR_RATIO = 30.0
+    GEARBOX_EFFICIENCY = 0.90
+    
     VESC_KP = 0.005   
     VESC_KI = 0.02   
 
     # --- 4.5 MOTOR THERMAL PROPERTIES ---
     T_AMBIENT = 25.0          
     C_TH_COPPER = 95.5        
-    # THE FIX: Reduced effective bulk mass to the immediate stator iron to allow faster localized heating
     C_TH_BULK = 250.0         
     R_TH_INTERNAL = 0.25      
     R_TH_AMBIENT = 0.60       
-    
     K_HYSTERESIS = 0.0012     
-    # THE FIX: Aggressive high-frequency core loss coefficient
     K_EDDY_CURRENT = 2.5e-7   
 
     # --- 4.7 BATTERY PACK CONSTANTS (SMC HCL-HV2 16S Series) ---
@@ -47,11 +56,6 @@ class OrbitronConfig:
     BATTERY_RESISTANCE = 0.0192 
 
     # --- 5. HARDWARE ABSTRACTION LAYER (HAL) ---
-    IDX_FR = 0 
-    IDX_BR = 1 
-    IDX_BL = 2 
-    IDX_FL = 3 
-
     INV_FR = 1.0
     INV_BR = -1.0 
     INV_BL = -1.0 
