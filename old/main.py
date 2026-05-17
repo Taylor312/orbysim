@@ -46,10 +46,10 @@ def main(telemetry_queue, speed_limit_val):
     import omni.appwindow
     import pygame 
 
-    from utils.urdf_compiler import compile_and_import
-    from utils.chassis_surgeon import setup_orbitron_physics
+    from old.urdf_compiler import compile_and_import
+    from old.chassis_surgeon import setup_orbitron_physics
     from utils.motor_sim import Apex3Motor
-    from utils.simple_force_solver import SimpleForceSolver
+    from old.simple_force_solver import SimpleForceSolver
 
     world = World(backend="torch", device="cuda:0")
     stage = world.stage

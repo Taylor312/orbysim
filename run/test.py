@@ -15,7 +15,10 @@ try:
 except Exception:
     pass
 
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+# THE FIX: Added an extra os.path.dirname() to step out of the 'run/' folder 
+# and target the root project directory so Python can find the 'utils/' package.
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from utils.constants import OrbitronConfig
 from utils.telemetry import run_telemetry
 from utils.motor_sim import Apex3Motor
@@ -125,7 +128,7 @@ def main(telemetry_queue, cmd_queue):
                 if "joints" in p_path: continue
                 if prim.IsInstanceable(): prim.SetInstanceable(False)
                 
-                # THE VISUAL FIX: Turn off the collision AND the visibility of the original CAD wheels
+                # Turn off the collision AND the visibility of the original CAD wheels
                 for child in prim.GetChildren():
                     if child.IsA(UsdGeom.Mesh): 
                         UsdPhysics.CollisionAPI.Apply(child).CreateCollisionEnabledAttr(False)
@@ -140,7 +143,6 @@ def main(telemetry_queue, cmd_queue):
                 direction_multiplier = 1.0 if "left" in p_path else -1.0
                 UsdGeom.XformCommonAPI(cylinder_geom).SetTranslate(Gf.Vec3d(0.015 * direction_multiplier, 0.0, 0.0))
                 
-                # Display the physics cylinders directly so you can observe the contact mechanics
                 cylinder_geom.CreateDisplayColorAttr([(0.0, 1.0, 0.0)])
                 cylinder_geom.CreateDisplayOpacityAttr([0.5]) 
                 
@@ -154,13 +156,13 @@ def main(telemetry_queue, cmd_queue):
                 mass_api.CreateMassAttr(1.5)
                 mass_api.CreateCenterOfMassAttr(Gf.Vec3f(0, 0, 0))
                 
-                # THE SLUGGISHNESS FIX: Lower virtual inertia by 10x
+                # Lower virtual inertia by 10x
                 mass_api.CreateDiagonalInertiaAttr(Gf.Vec3f(0.005, 0.005, 0.005))
 
             if prim.IsA(UsdPhysics.RevoluteJoint):
                 drive_api = UsdPhysics.DriveAPI.Apply(prim, "angular")
                 drive_api.CreateStiffnessAttr(0.0)
-                # THE SLUGGISHNESS FIX: Lower mechanical gearbox drag to allow rapid spool-up
+                # Lower mechanical gearbox drag to allow rapid spool-up
                 drive_api.CreateDampingAttr(0.2) 
 
     setup_orbitron_physics(OrbitronConfig.ROBOT_PRIM_PATH)
@@ -204,7 +206,7 @@ def main(telemetry_queue, cmd_queue):
     motor_bl = Apex3Motor()
     motor_br = Apex3Motor()
 
-    # THE TORQUE FIX: Raised to max Trampa VESC limit (250A) for violent acceleration
+    # Max Trampa VESC limit (250A) for violent acceleration
     MULE_CURRENT_LIMIT = 250.0 
     motor_fl.current_limit = MULE_CURRENT_LIMIT
     motor_fr.current_limit = MULE_CURRENT_LIMIT
@@ -281,7 +283,6 @@ def main(telemetry_queue, cmd_queue):
             efforts[bl_idx] = sanitize_torque(m_torque_bl) * GEAR_RATIO * 0.90 * OrbitronConfig.INV_BL
             efforts[br_idx] = sanitize_torque(m_torque_br) * GEAR_RATIO * 0.90 * OrbitronConfig.INV_BR
             
-            # The Hardware Clamp: Increased clamp bounds to allow the 250A limit to actually pass through
             efforts = torch.clamp(efforts, min=-200.0, max=200.0)
             orbitron.set_joint_efforts(efforts)
 
