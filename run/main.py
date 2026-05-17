@@ -15,6 +15,7 @@ try:
 except Exception:
     pass
 
+# Step back to the root directory to access utils
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.constants import OrbitronConfig
@@ -38,16 +39,16 @@ def main(telemetry_queue, cmd_queue):
         ]
     }
 
-    print(f" [INFO] Orbitron Architecture: Constants-Driven HITL Edition")
+    print(f" [INFO] Orbitron Architecture: Refactored & Stabilized HITL")
     simulation_app = SimulationApp(launch_config)
 
     # --- 3. IMPORTS ---
     from isaacsim.core.api import World
     from isaacsim.core.api.objects import GroundPlane
     from isaacsim.core.prims import Articulation, RigidPrim
-    from isaacsim.core.utils.stage import add_reference_to_stage
-    from pxr import UsdLux, Sdf, Gf, UsdPhysics, PhysxSchema, UsdGeom, UsdShade
+    from pxr import Usd, UsdLux, Sdf, Gf, UsdPhysics, PhysxSchema, UsdGeom, UsdShade
     import omni.kit.commands
+    from isaacsim.core.utils.stage import add_reference_to_stage
 
     # --- 4. START WORLD & TGS SOLVER ---
     world = World(
@@ -70,7 +71,7 @@ def main(telemetry_queue, cmd_queue):
 
     # --- 5. ENVIRONMENT ---
     light = UsdLux.DomeLight.Define(stage, Sdf.Path("/World/Sky"))
-    light.CreateIntensityAttr(1000)
+    light.CreateIntensityAttr(1500)
     ground = world.scene.add(GroundPlane(prim_path="/World/Ground", z_position=0))
 
     if os.path.exists(OrbitronConfig.USD_OUTPUT_PATH):
@@ -103,46 +104,90 @@ def main(telemetry_queue, cmd_queue):
         rubber_mat.CreateDynamicFrictionAttr(OrbitronConfig.DYNAMIC_FRICTION)
         rubber_mat.CreateRestitutionAttr(OrbitronConfig.RESTITUTION)
 
-        for prim in stage.Traverse():
-            if prim.HasAPI(UsdPhysics.ArticulationRootAPI):
-                prim.RemoveAPI(UsdPhysics.ArticulationRootAPI)
-
         root_prim = stage.GetPrimAtPath(root_path)
+
+        # ---------------------------------------------------------
+        # PHASE 1: THE BRUTE FORCE HIERARCHY CLEANER
+        # Scans the entire URDF tree and nukes all auto-generated 
+        # convex hulls and accidental nested RigidBodies.
+        # ---------------------------------------------------------
+        for desc in Usd.PrimRange(root_prim):
+            p_path = str(desc.GetPath())
+            
+            # Remove rogue Articulation Roots
+            if p_path != root_path and desc.HasAPI(UsdPhysics.ArticulationRootAPI):
+                desc.RemoveAPI(UsdPhysics.ArticulationRootAPI)
+
+            # Strip Nested RigidBodies (Fixes the missing xformstack errors)
+            if ("visuals" in p_path or "collisions" in p_path) and desc.HasAPI(UsdPhysics.RigidBodyAPI):
+                desc.RemoveAPI(UsdPhysics.RigidBodyAPI)
+
+            # Annihilate auto-generated collisions on Visual Meshes (Fixes the floating bot)
+            if desc.IsA(UsdGeom.Mesh) and "visuals" in p_path:
+                UsdPhysics.CollisionAPI.Apply(desc).CreateCollisionEnabledAttr(False)
+
+        # Apply true Articulation Root
         UsdPhysics.ArticulationRootAPI.Apply(root_prim)
         PhysxSchema.PhysxArticulationAPI.Apply(root_prim).CreateEnabledSelfCollisionsAttr(False)
 
-        for prim in stage.Traverse():
+        # ---------------------------------------------------------
+        # PHASE 2: EXPLICIT PHYSICS OVERRIDES & COLORIZATION
+        # ---------------------------------------------------------
+        links_to_parse = ["base_link", "front_spinner_1", "back_spinner_1", "FL_1", "FR_1", "BL_1", "BR_1"]
+
+        for prim in Usd.PrimRange(root_prim):
             p_path = str(prim.GetPath())
-            if not p_path.startswith(root_path): continue
-            if "physics_cylinder" in p_path: continue
-            if "visuals" in p_path or "collisions" in p_path:
-                if prim.HasAPI(UsdPhysics.RigidBodyAPI): prim.RemoveAPI(UsdPhysics.RigidBodyAPI)
-                continue
+            prim_name = prim.GetName()
+            
+            if prim_name not in links_to_parse: continue
+            if "visuals" in p_path or "collisions" in p_path: continue
+            if prim.IsInstanceable(): prim.SetInstanceable(False)
 
-            if p_path.endswith("base_link") and prim.IsA(UsdGeom.Xformable):
-                UsdPhysics.MassAPI.Apply(prim).CreateMassAttr(OrbitronConfig.CHASSIS_MASS_KG)
-                UsdPhysics.RigidBodyAPI.Apply(prim)
+            UsdPhysics.RigidBodyAPI.Apply(prim)
+            mass_api = UsdPhysics.MassAPI.Apply(prim)
 
-            if ("left" in p_path or "right" in p_path) and prim.IsA(UsdGeom.Xformable):
-                if "joints" in p_path: continue
-                if prim.IsInstanceable(): prim.SetInstanceable(False)
-                
-                for child in prim.GetChildren():
-                    if child.IsA(UsdGeom.Mesh): 
-                        UsdPhysics.CollisionAPI.Apply(child).CreateCollisionEnabledAttr(False)
-                        UsdGeom.Imageable(child).MakeInvisible()
+            # 1. CHASSIS
+            if prim_name == "base_link":
+                mass_api.CreateMassAttr(OrbitronConfig.CHASSIS_MASS_KG)
+                # Paint Chassis Steel Grey
+                for desc in Usd.PrimRange(prim):
+                    if desc.IsA(UsdGeom.Mesh) and "visuals" in str(desc.GetPath()):
+                        UsdGeom.Mesh(desc).CreateDisplayColorAttr([(0.3, 0.3, 0.35)])
 
+            # 2. WEAPONS
+            elif "spinner" in prim_name:
+                mass_api.CreateMassAttr(OrbitronConfig.WEAPON_MASS_KG)
+                mass_api.CreateCenterOfMassAttr(Gf.Vec3f(0, 0, 0))
+                # Paint Spinners Bright Silver
+                for desc in Usd.PrimRange(prim):
+                    if desc.IsA(UsdGeom.Mesh) and "visuals" in str(desc.GetPath()):
+                        UsdGeom.Mesh(desc).CreateDisplayColorAttr([(0.8, 0.8, 0.85)])
+
+            # 3. WHEELS
+            elif prim_name in ["FL_1", "FR_1", "BL_1", "BR_1"]:
+                mass_api.CreateMassAttr(OrbitronConfig.WHEEL_MASS_KG)
+                mass_api.CreateCenterOfMassAttr(Gf.Vec3f(0, 0, 0))
+                mass_api.CreateDiagonalInertiaAttr(Gf.Vec3f(
+                    OrbitronConfig.WHEEL_INERTIA, 
+                    OrbitronConfig.WHEEL_INERTIA, 
+                    OrbitronConfig.WHEEL_INERTIA
+                ))
+
+                # CREATE MATHEMATICAL PHYSICS CYLINDER
                 cylinder_path = f"{p_path}/physics_cylinder"
                 cylinder_geom = UsdGeom.Cylinder.Define(stage, cylinder_path)
                 cylinder_geom.CreateRadiusAttr(OrbitronConfig.WHEEL_RADIUS_M)
                 cylinder_geom.CreateHeightAttr(OrbitronConfig.WHEEL_WIDTH_M)
                 cylinder_geom.CreateAxisAttr("X") 
                 
-                direction_multiplier = 1.0 if "left" in p_path else -1.0
+                # THE FIX: Only offset by exactly HALF the width of the tire
+                half_width = OrbitronConfig.WHEEL_WIDTH_M / 2.0
+                direction_multiplier = -1.0 if "L_" in prim_name else 1.0
                 UsdGeom.XformCommonAPI(cylinder_geom).SetTranslate(
-                    Gf.Vec3d(OrbitronConfig.WHEEL_OFFSET_M * direction_multiplier, 0.0, 0.0)
+                    Gf.Vec3d(half_width * direction_multiplier, 0.0, 0.0)
                 )
                 
+                # Show the green physics cylinders (semi-transparent) for debug
                 cylinder_geom.CreateDisplayColorAttr([(0.0, 1.0, 0.0)])
                 cylinder_geom.CreateDisplayOpacityAttr([0.5]) 
                 
@@ -151,21 +196,24 @@ def main(telemetry_queue, cmd_queue):
                     UsdShade.Material(stage.GetPrimAtPath(mat_path)), materialPurpose="physics"
                 )
 
-                UsdPhysics.RigidBodyAPI.Apply(prim)
-                mass_api = UsdPhysics.MassAPI.Apply(prim)
-                mass_api.CreateMassAttr(OrbitronConfig.WHEEL_MASS_KG)
-                mass_api.CreateCenterOfMassAttr(Gf.Vec3f(0, 0, 0))
-                
-                mass_api.CreateDiagonalInertiaAttr(Gf.Vec3f(
-                    OrbitronConfig.WHEEL_INERTIA, 
-                    OrbitronConfig.WHEEL_INERTIA, 
-                    OrbitronConfig.WHEEL_INERTIA
-                ))
+                # Paint Visual CAD Tires Matte Black
+                for desc in Usd.PrimRange(prim):
+                    if desc.IsA(UsdGeom.Mesh) and "visuals" in str(desc.GetPath()):
+                        UsdGeom.Mesh(desc).CreateDisplayColorAttr([(0.05, 0.05, 0.05)])
 
+        # ---------------------------------------------------------
+        # PHASE 3: JOINT STABILIZATION
+        # ---------------------------------------------------------
+        for prim in Usd.PrimRange(root_prim):
             if prim.IsA(UsdPhysics.RevoluteJoint):
+                p_path = str(prim.GetPath())
                 drive_api = UsdPhysics.DriveAPI.Apply(prim, "angular")
                 drive_api.CreateStiffnessAttr(0.0)
-                drive_api.CreateDampingAttr(OrbitronConfig.GEARBOX_DRAG_DAMPING) 
+                
+                if "spin" in p_path:
+                    drive_api.CreateDampingAttr(1e6) # Hard lock the weapon bars for stability
+                else:
+                    drive_api.CreateDampingAttr(OrbitronConfig.GEARBOX_DRAG_DAMPING) 
 
     setup_orbitron_physics(OrbitronConfig.ROBOT_PRIM_PATH)
 
@@ -184,10 +232,10 @@ def main(telemetry_queue, cmd_queue):
             if all(k in name.lower() for k in keywords): return i
         return 0
 
-    fl_idx = get_dof_idx(["revolute_4"])
-    fr_idx = get_dof_idx(["revolute_1"])
-    bl_idx = get_dof_idx(["revolute_3"])
-    br_idx = get_dof_idx(["revolute_2"])
+    fl_idx = get_dof_idx(["frontleft"])
+    fr_idx = get_dof_idx(["frontright"])
+    bl_idx = get_dof_idx(["backleft"])
+    br_idx = get_dof_idx(["backright"])
 
     pygame.init()
     pygame.joystick.init()
@@ -213,9 +261,7 @@ def main(telemetry_queue, cmd_queue):
     motor_bl.current_limit = OrbitronConfig.ESC_CURRENT_LIMIT
     motor_br.current_limit = OrbitronConfig.ESC_CURRENT_LIMIT
 
-    # Dynamic limits pulling from Constants initially 
     WHEEL_RPM_CAP = OrbitronConfig.DEFAULT_RPM_CAP 
-
     frame_count = 0
 
     # --- 8. MAIN LOOP ---

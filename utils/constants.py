@@ -12,21 +12,29 @@ class OrbitronConfig:
     RENDER_DT = 1.0 / RENDER_HZ
     DEFAULT_RPM_CAP = 1600.0 
 
-    # --- 3. TEST MULE PHYSICS & KINEMATICS ---
-    CHASSIS_MASS_KG = 25.0
-    WHEEL_MASS_KG = 1.5
-    WHEEL_RADIUS_M = 0.03
-    WHEEL_WIDTH_M = 0.02
-    WHEEL_OFFSET_M = 0.015
+    # --- 3. 250LB HEAVYWEIGHT COMBAT PHYSICAL PROPERTIES ---
+    # Chassis (Base Link) mass and locked origin Center of Mass
+    CHASSIS_MASS_KG = 83.46
+    CHASSIS_COM_XYZ = [0.0, 0.0, 0.0] # Locked directly to your balanced visual origin
     
-    # Virtual Stability & Friction
-    WHEEL_INERTIA = 0.005
-    GEARBOX_DRAG_DAMPING = 0.2
+    # 4lb Wheels with 0.025 kg*m^2 Moment of Inertia
+    WHEEL_MASS_KG = 1.81
+    WHEEL_RADIUS_M = 0.06604
+    WHEEL_WIDTH_M = 0.0635
+    WHEEL_INERTIA = 0.025 
+    
+    # 25lb Weapon Spinners with 0.10 kg*m^2 Moment of Inertia
+    WEAPON_MASS_KG = 11.34
+    WEAPON_INERTIA = 0.10
+    
+    # Surface Traction & Contact Mechanics
     STATIC_FRICTION = 1.5
     DYNAMIC_FRICTION = 1.2
     RESTITUTION = 0.0
+    GEARBOX_DRAG_DAMPING = 0.2
     
-    DOWNFORCE_N = -1500.0
+    # 1100 lbs of Magnets pinning the bot down
+    DOWNFORCE_N = -4893.04
     DOWNFORCE_RAMP_TIME_S = 1.5
 
     # --- 4. MOTOR SIMULATOR (TP5870 750KV & Trampa VESC) ---
@@ -34,9 +42,9 @@ class OrbitronConfig:
     V_BUS_MIN = 51.2          
     MOTOR_KV = 750.0        
     MOTOR_RESISTANCE = 0.0081 
-    ESC_CURRENT_LIMIT = 250.0 
+    ESC_CURRENT_LIMIT = 250.0 # Restored to maximum current delivery
     
-    GEAR_RATIO = 30.0
+    GEAR_RATIO = 25.0
     GEARBOX_EFFICIENCY = 0.90
     
     VESC_KP = 0.005   
