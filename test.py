@@ -6,6 +6,7 @@ import time
 import torch
 import pygame
 
+# --- 1. DLL ANCHOR ---
 try:
     v_root = os.path.dirname(os.path.dirname(sys.executable))
     t_lib = os.path.join(v_root, "Lib", "site-packages", "torch", "lib")
@@ -20,8 +21,8 @@ from utils.telemetry import run_telemetry
 from utils.motor_sim import Apex3Motor
 from utils.battery_sim import OrbyBattery
 
-# Added cmd_queue parameter
 def main(telemetry_queue, cmd_queue):
+    # --- 2. CONFIGURATION ---
     from isaacsim import SimulationApp  
     
     launch_config = {
@@ -36,9 +37,10 @@ def main(telemetry_queue, cmd_queue):
         ]
     }
 
-    print(f" [INFO] Orbitron Architecture: 240 Hz Sub-Stepped HITL")
+    print(f" [INFO] Orbitron Architecture: 144Hz HITL Tuned Edition")
     simulation_app = SimulationApp(launch_config)
 
+    # --- 3. IMPORTS ---
     from isaacsim.core.api import World
     from isaacsim.core.api.objects import GroundPlane
     from isaacsim.core.prims import Articulation, RigidPrim
@@ -46,7 +48,9 @@ def main(telemetry_queue, cmd_queue):
     from pxr import UsdLux, Sdf, Gf, UsdPhysics, PhysxSchema, UsdGeom, UsdShade
     import omni.kit.commands
 
-    SIM_PHYSICS_DT = 1.0 / 240.0
+    # --- 4. START WORLD & 144Hz TGS SOLVER ---
+    # DECOUPLED CLOCKS: Physics at 144 Hz, Render at 60 Hz
+    SIM_PHYSICS_DT = 1.0 / 144.0
     SIM_RENDER_DT = 1.0 / 60.0
     
     world = World(backend="torch", device="cuda:0", physics_dt=SIM_PHYSICS_DT, rendering_dt=SIM_RENDER_DT)
@@ -58,10 +62,11 @@ def main(telemetry_queue, cmd_queue):
 
     physx_scene = PhysxSchema.PhysxSceneAPI.Apply(scene_prim)
     physx_scene.CreateSolverTypeAttr("TGS")
-    physx_scene.CreateTimeStepsPerSecondAttr(240) 
+    physx_scene.CreateTimeStepsPerSecondAttr(144) 
     physx_scene.CreateMaxPositionIterationCountAttr(32)
     physx_scene.CreateMaxVelocityIterationCountAttr(16)
 
+    # --- 5. ENVIRONMENT ---
     light = UsdLux.DomeLight.Define(stage, Sdf.Path("/World/Sky"))
     light.CreateIntensityAttr(1000)
     ground = world.scene.add(GroundPlane(prim_path="/World/Ground", z_position=0))
@@ -85,6 +90,7 @@ def main(telemetry_queue, cmd_queue):
 
     add_reference_to_stage(usd_path=OrbitronConfig.USD_OUTPUT_PATH, prim_path=OrbitronConfig.ROBOT_PRIM_PATH)
 
+    # --- 6. PHYSICS INJECTION ---
     def setup_orbitron_physics(root_path):
         mat_path = "/World/Physics_Materials/Rubber"
         stage.DefinePrim("/World/Physics_Materials", "Scope")
@@ -119,8 +125,11 @@ def main(telemetry_queue, cmd_queue):
                 if "joints" in p_path: continue
                 if prim.IsInstanceable(): prim.SetInstanceable(False)
                 
+                # THE VISUAL FIX: Turn off the collision AND the visibility of the original CAD wheels
                 for child in prim.GetChildren():
-                    if child.IsA(UsdGeom.Mesh): UsdPhysics.CollisionAPI.Apply(child).CreateCollisionEnabledAttr(False)
+                    if child.IsA(UsdGeom.Mesh): 
+                        UsdPhysics.CollisionAPI.Apply(child).CreateCollisionEnabledAttr(False)
+                        UsdGeom.Imageable(child).MakeInvisible()
 
                 cylinder_path = f"{p_path}/physics_cylinder"
                 cylinder_geom = UsdGeom.Cylinder.Define(stage, cylinder_path)
@@ -130,7 +139,10 @@ def main(telemetry_queue, cmd_queue):
                 
                 direction_multiplier = 1.0 if "left" in p_path else -1.0
                 UsdGeom.XformCommonAPI(cylinder_geom).SetTranslate(Gf.Vec3d(0.015 * direction_multiplier, 0.0, 0.0))
-                cylinder_geom.CreateDisplayOpacityAttr([0.0]) 
+                
+                # Display the physics cylinders directly so you can observe the contact mechanics
+                cylinder_geom.CreateDisplayColorAttr([(0.0, 1.0, 0.0)])
+                cylinder_geom.CreateDisplayOpacityAttr([0.5]) 
                 
                 UsdPhysics.CollisionAPI.Apply(stage.GetPrimAtPath(cylinder_path))
                 UsdShade.MaterialBindingAPI.Apply(stage.GetPrimAtPath(cylinder_path)).Bind(
@@ -141,15 +153,19 @@ def main(telemetry_queue, cmd_queue):
                 mass_api = UsdPhysics.MassAPI.Apply(prim)
                 mass_api.CreateMassAttr(1.5)
                 mass_api.CreateCenterOfMassAttr(Gf.Vec3f(0, 0, 0))
-                mass_api.CreateDiagonalInertiaAttr(Gf.Vec3f(0.05, 0.05, 0.05))
+                
+                # THE SLUGGISHNESS FIX: Lower virtual inertia by 10x
+                mass_api.CreateDiagonalInertiaAttr(Gf.Vec3f(0.005, 0.005, 0.005))
 
             if prim.IsA(UsdPhysics.RevoluteJoint):
                 drive_api = UsdPhysics.DriveAPI.Apply(prim, "angular")
                 drive_api.CreateStiffnessAttr(0.0)
-                drive_api.CreateDampingAttr(1.5) 
+                # THE SLUGGISHNESS FIX: Lower mechanical gearbox drag to allow rapid spool-up
+                drive_api.CreateDampingAttr(0.2) 
 
     setup_orbitron_physics(OrbitronConfig.ROBOT_PRIM_PATH)
 
+    # --- 7. HARDWARE INIT ---
     orbitron = Articulation(prim_paths_expr=OrbitronConfig.ROBOT_PRIM_PATH, name="Orbitron")
     world.scene.add(orbitron)
 
@@ -164,7 +180,6 @@ def main(telemetry_queue, cmd_queue):
             if all(k in name.lower() for k in keywords): return i
         return 0
 
-    # THE FIX: Bound the exact Joint names generated by the URDF Parser
     fl_idx = get_dof_idx(["revolute_4"])
     fr_idx = get_dof_idx(["revolute_1"])
     bl_idx = get_dof_idx(["revolute_3"])
@@ -189,24 +204,25 @@ def main(telemetry_queue, cmd_queue):
     motor_bl = Apex3Motor()
     motor_br = Apex3Motor()
 
-    MULE_CURRENT_LIMIT = 150.0 
+    # THE TORQUE FIX: Raised to max Trampa VESC limit (250A) for violent acceleration
+    MULE_CURRENT_LIMIT = 250.0 
     motor_fl.current_limit = MULE_CURRENT_LIMIT
     motor_fr.current_limit = MULE_CURRENT_LIMIT
     motor_bl.current_limit = MULE_CURRENT_LIMIT
     motor_br.current_limit = MULE_CURRENT_LIMIT
 
     GEAR_RATIO = 25.0 
-    WHEEL_RPM_CAP = 1600.0 # Default. Overridden by UI.
+    WHEEL_RPM_CAP = 1600.0 
     DOWNFORCE_N = -1500.0 
 
     frame_count = 0
 
+    # --- 8. MAIN LOOP ---
     while simulation_app.is_running():
         frame_count += 1
         accel = 0.0
         steer = 0.0
         
-        # PULL FROM UI DUPLEX QUEUE
         while not cmd_queue.empty():
             try:
                 cmds = cmd_queue.get_nowait()
@@ -230,7 +246,6 @@ def main(telemetry_queue, cmd_queue):
         right_mix = accel - steer
         max_mag = max(1.0, abs(left_mix), abs(right_mix))
         
-        # Target MOTOR RPM (Pure Joystick Demand * Gear Ratio)
         t_motor_rpm_fl = (left_mix / max_mag) * WHEEL_RPM_CAP * GEAR_RATIO
         t_motor_rpm_bl = (left_mix / max_mag) * WHEEL_RPM_CAP * GEAR_RATIO
         t_motor_rpm_fr = (right_mix / max_mag) * WHEEL_RPM_CAP * GEAR_RATIO
@@ -239,7 +254,6 @@ def main(telemetry_queue, cmd_queue):
         if orbitron.num_dof >= 4:
             current_rads = orbitron.get_joint_velocities()[0]
             
-            # THE INVERSION FIX: Apply OrbitronConfig.INV directly to the physical readout
             w_rpm_fl = current_rads[fl_idx].item() * (30.0 / np.pi) * OrbitronConfig.INV_FL
             w_rpm_fr = current_rads[fr_idx].item() * (30.0 / np.pi) * OrbitronConfig.INV_FR
             w_rpm_bl = current_rads[bl_idx].item() * (30.0 / np.pi) * OrbitronConfig.INV_BL
@@ -262,20 +276,18 @@ def main(telemetry_queue, cmd_queue):
                 return float(t)
 
             efforts = torch.zeros(orbitron.num_dof, device="cuda:0")
-            
-            # THE INVERSION FIX: Apply OrbitronConfig.INV back before injecting into the engine
             efforts[fl_idx] = sanitize_torque(m_torque_fl) * GEAR_RATIO * 0.90 * OrbitronConfig.INV_FL
             efforts[fr_idx] = sanitize_torque(m_torque_fr) * GEAR_RATIO * 0.90 * OrbitronConfig.INV_FR
             efforts[bl_idx] = sanitize_torque(m_torque_bl) * GEAR_RATIO * 0.90 * OrbitronConfig.INV_BL
             efforts[br_idx] = sanitize_torque(m_torque_br) * GEAR_RATIO * 0.90 * OrbitronConfig.INV_BR
             
-            efforts = torch.clamp(efforts, min=-150.0, max=150.0)
+            # The Hardware Clamp: Increased clamp bounds to allow the 250A limit to actually pass through
+            efforts = torch.clamp(efforts, min=-200.0, max=200.0)
             orbitron.set_joint_efforts(efforts)
 
             downforce_tensor = torch.tensor([[0.0, 0.0, current_downforce_n]], dtype=torch.float32, device="cuda:0")
             chassis.apply_forces(forces=downforce_tensor, is_global=True)
 
-            # Send data to dashboard (passing the *wheel* RPMs, not motor RPMs, so the graph is readable)
             try:
                 telemetry_queue.put_nowait({
                     "accel": accel, "steer": steer,
@@ -292,7 +304,6 @@ def main(telemetry_queue, cmd_queue):
 
 if __name__ == '__main__':
     tele_queue = multiprocessing.Queue()
-    # CREATE DUPLEX QUEUE
     cmd_queue = multiprocessing.Queue()
     tele_process = multiprocessing.Process(target=run_telemetry, args=(tele_queue, cmd_queue))
     tele_process.start()
