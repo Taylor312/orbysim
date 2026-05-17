@@ -34,7 +34,6 @@ simulation_app = SimulationApp(launch_config)
 # --- 3. STABLE IMPORTS ---
 from isaacsim.core.api import World
 from isaacsim.core.api.objects import GroundPlane
-# THE FIX: RigidPrim *is* the tensorized View class in Isaac Sim 5.x
 from isaacsim.core.prims import Articulation, RigidPrim
 from isaacsim.core.utils.stage import add_reference_to_stage
 from pxr import UsdLux, Sdf, Gf, UsdPhysics, PhysxSchema, UsdGeom, UsdShade
@@ -112,6 +111,7 @@ def setup_orbitron_physics(root_path):
             UsdPhysics.MassAPI.Apply(prim).CreateMassAttr(25.0)
             UsdPhysics.RigidBodyAPI.Apply(prim)
 
+        # CYLINDER WHEEL SURGERY
         if ("left" in p_path or "right" in p_path) and prim.IsA(UsdGeom.Xformable):
             if "joints" in p_path: continue
             
@@ -122,28 +122,40 @@ def setup_orbitron_physics(root_path):
                 if child.IsA(UsdGeom.Mesh):
                     UsdPhysics.CollisionAPI.Apply(child).CreateCollisionEnabledAttr(False)
 
-            # ... [previous code] ...
             cylinder_path = f"{p_path}/physics_cylinder"
             cylinder_geom = UsdGeom.Cylinder.Define(stage, cylinder_path)
             
             cylinder_geom.CreateRadiusAttr(0.03)
             cylinder_geom.CreateHeightAttr(0.02)
-            cylinder_geom.CreateAxisAttr("Y") 
             
-            # --- THE VISUALIZATION FIX ---
-            # 1. Delete or comment out the MakeInvisible command:
-            # UsdGeom.Imageable(cylinder_geom).MakeInvisible()
+            # --- FIX 1: AXIS ALIGNMENT ---
+            AXLE_AXIS = "X" 
+            cylinder_geom.CreateAxisAttr(AXLE_AXIS) 
             
-            # 2. Force the geometry to render as semi-transparent Neon Green
-            cylinder_geom.CreateDisplayColorAttr([(0.0, 1.0, 0.0)])
-            cylinder_geom.CreateDisplayOpacityAttr([0.5])
-            # -----------------------------
+            # --- FIX 2: CONCENTRIC OFFSET ---
+            OFFSET_DISTANCE = 0.015 
+            
+            direction_multiplier = 1.0 if "left" in p_path else -1.0
+            
+            transform_api = UsdGeom.XformCommonAPI(cylinder_geom)
+            
+            # CRITICAL FIX: Changed Gf.Vec3f to Gf.Vec3d to match C++ signature
+            if AXLE_AXIS == "X":
+                transform_api.SetTranslate(Gf.Vec3d(OFFSET_DISTANCE * direction_multiplier, 0.0, 0.0))
+            elif AXLE_AXIS == "Y":
+                transform_api.SetTranslate(Gf.Vec3d(0.0, OFFSET_DISTANCE * direction_multiplier, 0.0))
+            elif AXLE_AXIS == "Z":
+                transform_api.SetTranslate(Gf.Vec3d(0.0, 0.0, OFFSET_DISTANCE * direction_multiplier))
+
+            # Maintain the debug visualization
+            #cylinder_geom.CreateDisplayColorAttr([(0.0, 1.0, 0.0)])
+            #cylinder_geom.CreateDisplayOpacityAttr([0.6])
+            cylinder_geom.CreateDisplayOpacityAttr([0.0])
             
             UsdPhysics.CollisionAPI.Apply(stage.GetPrimAtPath(cylinder_path))
             UsdShade.MaterialBindingAPI.Apply(stage.GetPrimAtPath(cylinder_path)).Bind(
                 UsdShade.Material(stage.GetPrimAtPath(mat_path)), materialPurpose="physics"
             )
-            # ... [continue code] ...
 
             UsdPhysics.RigidBodyAPI.Apply(prim)
             mass_api = UsdPhysics.MassAPI.Apply(prim)
@@ -164,11 +176,9 @@ world.scene.add(orbitron)
 
 # --- 8.1 EXTRACT CHASSIS VIEW FOR DOWNFORCE INJECTION ---
 chassis_path = f"{robot_path}/base_link" 
-# Init as a View using prim_paths_expr
 chassis = RigidPrim(prim_paths_expr=chassis_path, name="orbitron_chassis")
 world.scene.add(chassis)
 
-# Tensors are allocated here
 world.reset()
 
 dof_names = orbitron.dof_names
@@ -236,12 +246,8 @@ while simulation_app.is_running():
             
         orbitron.set_joint_velocity_targets(action)
 
-    # --- 11. HALBACH DOWNFORCE INJECTION LOOP ---
-    # The View API strictly expects a 2D tensor of shape (num_prims, 3).
-    # Since we have 1 chassis in the view, the shape is (1, 3).
     downforce_tensor = torch.tensor([[0.0, 0.0, DOWNFORCE_N]], dtype=torch.float32, device="cuda:0")
     
-    # Apply continuous Z-axis pull natively on the GPU tensor
     chassis.apply_forces(
         forces=downforce_tensor, 
         is_global=False 
