@@ -3,10 +3,10 @@ import time
 from collections import deque
 import dearpygui.dearpygui as dpg
 
-# ADDED: speed_limit_val pointer for bidirectional memory mapping
-def run_telemetry(data_queue, speed_limit_val=None):
+# ADDED cmd_queue to allow the UI to send data back to the physics engine
+def run_telemetry(data_queue, cmd_queue=None):
     dpg.create_context()
-    dpg.create_viewport(title="Orbitron Live Telemetry", width=800, height=650)
+    dpg.create_viewport(title="Orbitron Live Telemetry", width=800, height=700)
     dpg.setup_dearpygui()
 
     max_points = 200
@@ -16,15 +16,15 @@ def run_telemetry(data_queue, speed_limit_val=None):
     thrust_data = deque(maxlen=max_points)
     yaw_data = deque(maxlen=max_points)
 
-    with dpg.window(label="Diagnostics", width=780, height=630, no_collapse=True):
+    with dpg.window(label="Diagnostics", width=780, height=680, no_collapse=True):
         dpg.add_text("STATUS: Waiting for physics...", tag="status_text", color=[255, 200, 0])
         dpg.add_separator()
         
-        # --- THE SPEED LIMITER SLIDER ---
-        dpg.add_slider_float(label="Max Speed Limit %", tag="ui_max_speed", min_value=1.0, max_value=100.0, default_value=100.0)
-        
         dpg.add_slider_float(label="Left Stick Y (Accel)", tag="ui_accel", min_value=-1.0, max_value=1.0, default_value=0.0)
         dpg.add_slider_float(label="Right Stick X (Steer)", tag="ui_steer", min_value=-1.0, max_value=1.0, default_value=0.0)
+        
+        # THE FIX: Added the Max RPM Slider
+        dpg.add_slider_float(label="Max Wheel RPM Limit", tag="ui_max_rpm", min_value=100.0, max_value=3000.0, default_value=1600.0)
         dpg.add_separator()
 
         with dpg.plot(label="Front-Left Wheel (RPM)", height=200, width=-1):
@@ -45,10 +45,6 @@ def run_telemetry(data_queue, speed_limit_val=None):
     start_time = time.time()
     
     while dpg.is_dearpygui_running():
-        # WRITE: Push the GUI slider value back to the physics engine memory map
-        if speed_limit_val is not None:
-            speed_limit_val.value = dpg.get_value("ui_max_speed") / 100.0
-
         latest_data = None
         while not data_queue.empty():
             try:
@@ -81,6 +77,15 @@ def run_telemetry(data_queue, speed_limit_val=None):
             dpg.fit_axis_data("y_axis_rpm")
             dpg.fit_axis_data("x_axis_force")
             dpg.fit_axis_data("y_axis_force")
-        
+
+        # PUSH COMMANDS BACK TO PHYSICS
+        if cmd_queue is not None:
+            try:
+                cmd_queue.put_nowait({
+                    "max_rpm": dpg.get_value("ui_max_rpm")
+                })
+            except:
+                pass
+
         dpg.render_dearpygui_frame()
     dpg.destroy_context()
