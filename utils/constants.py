@@ -1,12 +1,14 @@
 class OrbitronConfig:
     # --- 1. ENVIRONMENT & ASSETS ---
     TARGET_GPU_UUID = "GPU-6edeed59-5bbf-c940-8e42-5830baef4d84"
-    URDF_PATH = "C:/MasterData/Backable/3d ENG files/issacsimtestfiles/testudrf1_description/urdf/testudrf1.xacro"
-    USD_OUTPUT_PATH = "C:/MasterData/Backable/3d ENG files/issacsimtestfiles/testudrf1_description/urdf/testudrf1.usd"
+    
+    # Updated paths pointing to the new orbysim_description directory
+    URDF_PATH = "C:/MasterData/Backable/3d ENG files/issacsimtestfiles/orbysim_description/urdf/orbysim.xacro"
+    USD_OUTPUT_PATH = "C:/MasterData/Backable/3d ENG files/issacsimtestfiles/orbysim_description/urdf/orbysim.usd"
     ROBOT_PRIM_PATH = "/World/TankRover"
 
     # --- 2. SIMULATION TIMING & LIMITS ---
-    PHYSICS_HZ = 144
+    PHYSICS_HZ = 200
     RENDER_HZ = 60
     PHYSICS_DT = 1.0 / PHYSICS_HZ
     RENDER_DT = 1.0 / RENDER_HZ
@@ -23,15 +25,18 @@ class OrbitronConfig:
     WHEEL_WIDTH_M = 0.0635
     WHEEL_INERTIA = 0.025 
     
+    # THE FIX: Added the missing offset variable (0.0 keeps it perfectly centered on the joint origin)
+    WHEEL_OFFSET_M = 0.03175
+    
     # 25lb Weapon Spinners with 0.10 kg*m^2 Moment of Inertia
     WEAPON_MASS_KG = 11.34
     WEAPON_INERTIA = 0.10
     
     # Surface Traction & Contact Mechanics
     STATIC_FRICTION = 1.5
-    DYNAMIC_FRICTION = 1.2
+    DYNAMIC_FRICTION = 1.1
     RESTITUTION = 0.0
-    GEARBOX_DRAG_DAMPING = 0.2
+    GEARBOX_DRAG_DAMPING = 0.005
     
     # 1100 lbs of Magnets pinning the bot down
     DOWNFORCE_N = -4893.04

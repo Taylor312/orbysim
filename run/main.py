@@ -149,6 +149,9 @@ def main(telemetry_queue, cmd_queue):
             # 1. CHASSIS
             if prim_name == "base_link":
                 mass_api.CreateMassAttr(OrbitronConfig.CHASSIS_MASS_KG)
+                # THE FIX: Lock the Center of Mass to the defined coordinates
+                mass_api.CreateCenterOfMassAttr(Gf.Vec3f(*OrbitronConfig.CHASSIS_COM_XYZ))
+                
                 # Paint Chassis Steel Grey
                 for desc in Usd.PrimRange(prim):
                     if desc.IsA(UsdGeom.Mesh) and "visuals" in str(desc.GetPath()):
@@ -158,6 +161,13 @@ def main(telemetry_queue, cmd_queue):
             elif "spinner" in prim_name:
                 mass_api.CreateMassAttr(OrbitronConfig.WEAPON_MASS_KG)
                 mass_api.CreateCenterOfMassAttr(Gf.Vec3f(0, 0, 0))
+                # THE FIX: Apply the explicit heavy weapon inertia
+                mass_api.CreateDiagonalInertiaAttr(Gf.Vec3f(
+                    OrbitronConfig.WEAPON_INERTIA, 
+                    OrbitronConfig.WEAPON_INERTIA, 
+                    OrbitronConfig.WEAPON_INERTIA
+                ))
+                
                 # Paint Spinners Bright Silver
                 for desc in Usd.PrimRange(prim):
                     if desc.IsA(UsdGeom.Mesh) and "visuals" in str(desc.GetPath()):
@@ -180,16 +190,17 @@ def main(telemetry_queue, cmd_queue):
                 cylinder_geom.CreateHeightAttr(OrbitronConfig.WHEEL_WIDTH_M)
                 cylinder_geom.CreateAxisAttr("X") 
                 
-                # THE FIX: Only offset by exactly HALF the width of the tire
-                half_width = OrbitronConfig.WHEEL_WIDTH_M / 2.0
+                # THE FIX: Directly read the WHEEL_OFFSET_M from constants. 
+                # (Since you set it to 0.0, the cylinders will spawn dead-center at the joint)
                 direction_multiplier = -1.0 if "L_" in prim_name else 1.0
                 UsdGeom.XformCommonAPI(cylinder_geom).SetTranslate(
-                    Gf.Vec3d(half_width * direction_multiplier, 0.0, 0.0)
+                    Gf.Vec3d(OrbitronConfig.WHEEL_OFFSET_M * direction_multiplier, 0.0, 0.0)
                 )
                 
                 # Show the green physics cylinders (semi-transparent) for debug
-                cylinder_geom.CreateDisplayColorAttr([(0.0, 1.0, 0.0)])
-                cylinder_geom.CreateDisplayOpacityAttr([0.5]) 
+               # cylinder_geom.CreateDisplayColorAttr([(0.0, 1.0, 0.0)])
+                #cylinder_geom.CreateDisplayOpacityAttr([0.5]) 
+                UsdGeom.Imageable(cylinder_geom).MakeInvisible()
                 
                 UsdPhysics.CollisionAPI.Apply(stage.GetPrimAtPath(cylinder_path))
                 UsdShade.MaterialBindingAPI.Apply(stage.GetPrimAtPath(cylinder_path)).Bind(
@@ -263,6 +274,7 @@ def main(telemetry_queue, cmd_queue):
 
     WHEEL_RPM_CAP = OrbitronConfig.DEFAULT_RPM_CAP 
     frame_count = 0
+    last_speed_mps = 0.0
 
     # --- 8. MAIN LOOP ---
     while simulation_app.is_running():
@@ -332,12 +344,47 @@ def main(telemetry_queue, cmd_queue):
             downforce_tensor = torch.tensor([[0.0, 0.0, current_downforce_n]], dtype=torch.float32, device="cuda:0")
             chassis.apply_forces(forces=downforce_tensor, is_global=True)
 
+            # --- KINEMATICS CALCULATIONS ---
+            # 1. Velocity (MPH)
+            # get_linear_velocities() returns a [X, Y, Z] tensor
+            chassis_vel = chassis.get_linear_velocities()[0]
+            # Speed magnitude in the X/Y plane
+            speed_mps = torch.norm(chassis_vel[0:2]).item() 
+            speed_mph = speed_mps * 2.23694
+            
+            # 2. Acceleration (G-Force)
+            accel_mps2 = (speed_mps - last_speed_mps) / OrbitronConfig.PHYSICS_DT
+            accel_g = accel_mps2 / 9.81
+            last_speed_mps = speed_mps
+
+            # 3. Slip Percentage
+            slip_pct = -1.0 # Default to -1 (Off)
+            if abs(steer) < 0.1: # Only calculate when moving perfectly straight
+                # Theoretical speed = (Avg Wheel RPM * 2pi/60) * Radius
+                avg_wheel_rpm = (abs(w_rpm_fl) + abs(w_rpm_fr) + abs(w_rpm_bl) + abs(w_rpm_br)) / 4.0
+                theoretical_speed_mps = (avg_wheel_rpm * 2.0 * np.pi / 60.0) * OrbitronConfig.WHEEL_RADIUS_M
+                
+                # Prevent divide-by-zero when standing still
+                if theoretical_speed_mps > 0.1: 
+                    slip_pct = ((theoretical_speed_mps - speed_mps) / theoretical_speed_mps) * 100.0
+                    slip_pct = max(0.0, min(100.0, slip_pct)) # Clamp between 0% and 100%
+
+            # --- TELEMETRY PAYLOAD ---
             try:
                 telemetry_queue.put_nowait({
-                    "accel": accel, "steer": steer,
-                    "t_rpm_fl": t_motor_rpm_fl / OrbitronConfig.GEAR_RATIO, 
-                    "c_rpm_fl": c_motor_rpm_fl / OrbitronConfig.GEAR_RATIO,
-                    "f_thrust": 0.0, "t_yaw": 0.0
+                    "accel": accel, 
+                    "steer": steer,
+                    "t_wheel_rpm": t_motor_rpm_fl / OrbitronConfig.GEAR_RATIO, 
+                    "c_wheel_rpm": c_motor_rpm_fl / OrbitronConfig.GEAR_RATIO,
+                    "c_motor_rpm": c_motor_rpm_fl,
+                    "t_wheel_fl": efforts[fl_idx].item(),
+                    "t_wheel_fr": efforts[fr_idx].item(),
+                    "t_wheel_bl": efforts[bl_idx].item(),
+                    "t_wheel_br": efforts[br_idx].item(),
+                    "t_motor_fl": m_torque_fl, # Original ESC torque before gearing
+                    "speed_mph": speed_mph,
+                    "accel_g": accel_g,
+                    "slip_pct": slip_pct
                 })
             except:
                 pass 
