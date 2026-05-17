@@ -23,9 +23,6 @@ class Apex3Motor:
         self.R_ambient = OrbitronConfig.R_TH_AMBIENT
 
     def compute_torque(self, target_rpm, current_rpm, dt, battery_obj=None):
-        """
-        VESC RPM Controller + Implicit Asymmetric Circuit Solver + Thermal Model
-        """
         # 1. PI Velocity Controller
         error = target_rpm - current_rpm
         
@@ -44,11 +41,10 @@ class Apex3Motor:
         )
         self.prev_allowed_current = esc_allowed_current
 
-        # 2. IMPLICIT ASYMMETRIC CIRCUIT SOLVER (The Fix!)
+        # 2. IMPLICIT ASYMMETRIC CIRCUIT SOLVER
         v_emf = current_rpm / self.Kv
         
         if battery_obj is not None:
-            # Combine resistances to kill the discrete feedback loop
             R_total = self.R + battery_obj.R_internal
             V_source = battery_obj.v_oc
         else:
@@ -63,11 +59,14 @@ class Apex3Motor:
         
         actual_current = np.clip(esc_allowed_current, i_lower_bound, i_upper_bound)
 
+        # THE AVALANCHE FIX: Absolute hardware safety cutoff. 
+        # Prevents physics micro-glitches from generating infinite regenerative currents.
+        actual_current = np.clip(actual_current, -self.current_limit, self.current_limit)
+
         # 3. Electrical Power to Battery
         v_applied = (actual_current * self.R) + v_emf
         
         if battery_obj is not None:
-            # Calculate true terminal voltage for accurate power extraction
             V_terminal = battery_obj.v_oc - (actual_current * battery_obj.R_internal)
         else:
             V_terminal = self.V_bus
